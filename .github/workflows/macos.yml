@@ -62,5 +62,12 @@ jobs:
         working-directory: ${{runner.workspace}}/build
         run: |
           echo 'hello world' > demo.php 
-          $GITHUB_WORKSPACE/objs/bin/kphp2cpp --cxx ${{matrix.compiler}} demo.php
+          ${{runner.workspace}}/build/objs/bin/kphp2cpp --cxx ${{matrix.compiler}} demo.php
           kphp_out/server -o
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kphp2cpp-macos-arm64-cpp${{matrix.cpp}}
+          path: ${{runner.workspace}}/build/objs/bin/kphp2cpp
+          retention-days: 7

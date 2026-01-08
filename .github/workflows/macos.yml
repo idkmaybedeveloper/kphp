@@ -62,6 +62,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: kphp2cpp-macos-arm64-cpp${{matrix.cpp}}
-          path: ${{runner.workspace}}/build/objs/bin/kphp2cpp
+          path: ${{github.workspace}}/objs/bin/kphp2cpp
           retention-days: 7
 

@@ -58,10 +58,16 @@ jobs:
       - name: Run unit tests
         run: make -C ${{runner.workspace}}/build -j$(nproc) test
 
-      - name: Upload binary artifact
+      - name: Upload kphp artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: kphp2cpp-macos-arm64-cpp${{matrix.cpp}}
-          path: ${{github.workspace}}/objs/bin/kphp2cpp
+          name: kphp-macos-arm64-cpp${{matrix.cpp}}
+          path: |
+            ${{github.workspace}}/objs/bin/kphp2cpp
+            ${{github.workspace}}/objs/php_lib_version.sha256
+            ${{github.workspace}}/objs/libkphp-full-runtime-no-pic.a
+            ${{github.workspace}}/objs/libkphp-full-runtime-pic.a
+            ${{github.workspace}}/objs/generated/auto/runtime/
+            ${{github.workspace}}/builtin-functions/
           retention-days: 7
 

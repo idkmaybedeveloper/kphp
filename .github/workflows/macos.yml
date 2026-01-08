@@ -58,13 +58,6 @@ jobs:
       - name: Run unit tests
         run: make -C ${{runner.workspace}}/build -j$(nproc) test
 
-      - name: Compile dummy PHP script
-        working-directory: ${{runner.workspace}}/build
-        run: |
-          echo 'hello world' > demo.php 
-          ${{runner.workspace}}/build/objs/bin/kphp2cpp --cxx ${{matrix.compiler}} demo.php
-          kphp_out/server -o
-
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:

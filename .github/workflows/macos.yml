@@ -71,3 +71,4 @@ jobs:
           name: kphp2cpp-macos-arm64-cpp${{matrix.cpp}}
           path: ${{runner.workspace}}/build/objs/bin/kphp2cpp
           retention-days: 7
+

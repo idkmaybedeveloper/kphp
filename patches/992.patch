@@ -1,0 +1,27 @@
+From f031efa9d11cd806fc3206fa6c4afeb3df7f3c43 Mon Sep 17 00:00:00 2001
+From: Vladislav Senin <troy4eg@gmail.com>
+Date: Wed, 24 Apr 2024 15:56:37 +0300
+Subject: [PATCH] fixed mac os http server
+
+---
+ server/php-engine.cpp | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/server/php-engine.cpp b/server/php-engine.cpp
+index 6a53a9ec6d..a966339107 100644
+--- a/server/php-engine.cpp
++++ b/server/php-engine.cpp
+@@ -1460,6 +1460,13 @@ void generic_event_loop(WorkerType worker_type, bool init_and_listen_rpc_port) n
+     case WorkerType::general_worker: {
+       const auto &http_server_ctx = vk::singleton<HttpServerContext>::get();
+ 
++#if defined(__APPLE__)
++      /*
++         * this is a hack, for more information, see https://github.com/VKCOM/kphp/issues/986
++       */
++      socket(AF_LOCAL, SOCK_DGRAM, 0);
++#endif
++
+       if (http_server_ctx.http_server_enabled()) {
+         http_port = http_server_ctx.worker_http_port();
+         http_sfd = http_server_ctx.worker_http_socket_fd();

@@ -1455,6 +1455,13 @@ void generic_event_loop(WorkerType worker_type, bool invoke_dummy_self_rpc_reque
       const auto &http_server_ctx = vk::singleton<HttpServerContext>::get();
       const auto &rpc_server_ctx = vk::singleton<RpcServerContext>::get();
 
+#if defined(__APPLE__)
+      /*
+       * this is a hack, for more information, see https://github.com/VKCOM/kphp/issues/986
+       */
+      socket(AF_LOCAL, SOCK_DGRAM, 0);
+#endif
+
       if (http_server_ctx.server_enabled()) {
         http_port = http_server_ctx.worker_port();
         http_sfd = http_server_ctx.worker_socket_fd();

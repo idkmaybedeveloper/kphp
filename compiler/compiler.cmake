@@ -248,6 +248,10 @@ vk_add_library_no_pic(kphp2cpp_src-no-pic OBJECT ${KPHP_COMPILER_SOURCES})
 add_dependencies(kphp2cpp_src-no-pic OpenSSL::no-pic::Crypto RE2::no-pic::re2 YAML_CPP::no-pic::yaml-cpp)
 target_include_directories(kphp2cpp_src-no-pic PUBLIC ${OPENSSL_NO_PIC_INCLUDE_DIR} ${RE2_NO_PIC_INCLUDE_DIRS} ${YAML_CPP_NO_PIC_INCLUDE_DIRS})
 
+# kphp2cpp_src-no-pic sources include common/wrappers/fmt_format.h (and thus <fmt/core.h>),
+# so it must inherit fmt include directories during compilation.
+target_link_libraries(kphp2cpp_src-no-pic PUBLIC fmt::fmt)
+
 file(MAKE_DIRECTORY ${KPHP_COMPILER_AUTO_DIR})
 add_custom_command(OUTPUT ${KEYWORDS_SET}
                    COMMAND gperf -CGD -c -N get_type -Z KeywordsSet -K keyword -L C++ -t ${KEYWORDS_GPERF} > ${KEYWORDS_SET}

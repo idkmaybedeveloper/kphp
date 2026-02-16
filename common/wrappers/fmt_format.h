@@ -38,7 +38,7 @@ namespace fmt {
 template<>
 struct formatter<vk::string_view> : fmt::formatter<fmt::string_view> {
   template<typename FormatCtx>
-  auto format(vk::string_view a, FormatCtx& ctx) {
+  auto format(vk::string_view a, FormatCtx& ctx) const {
     return fmt::formatter<fmt::string_view>::format(fmt::string_view{a.data(), a.size()}, ctx);
   }
 };

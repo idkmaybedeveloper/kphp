@@ -75,19 +75,19 @@ kphp::coro::task<class_instance<C$VK$TL$RpcResponse>> typed_rpc_tl_query_result_
 
 // === server =====================================================================================
 
-inline bool f$store_int(int64_t v) noexcept {
-  if (tl::is_int32_overflow(v)) [[unlikely]] {
-    kphp::log::warning("integer {} overflows int32, it will be cast to {}", v, static_cast<int32_t>(v));
-  }
-  tl::i32{.value = static_cast<int32_t>(v)}.store(RpcServerInstanceState::get().tl_storer);
-  return true;
-}
-
 inline bool f$store_byte(int64_t v) noexcept {
   if (v < 0 || v > 255) [[unlikely]] {
     kphp::log::warning("integer {} overflows uint8, it will be cast to {}", v, static_cast<uint8_t>(v));
   }
   tl::u8{.value = static_cast<uint8_t>(v)}.store(RpcServerInstanceState::get().tl_storer);
+  return true;
+}
+
+inline bool f$store_int(int64_t v) noexcept {
+  if (tl::is_int32_overflow(v)) [[unlikely]] {
+    kphp::log::warning("integer {} overflows int32, it will be cast to {}", v, static_cast<int32_t>(v));
+  }
+  tl::i32{.value = static_cast<int32_t>(v)}.store(RpcServerInstanceState::get().tl_storer);
   return true;
 }
 
@@ -112,7 +112,7 @@ inline bool f$store_string(const string& v) noexcept {
 }
 
 inline bool f$store_string2(const string& v) noexcept {
-  tl::string{.value = {v.c_str(), v.size()}}.store2(RpcServerInstanceState::get().tl_storer);
+  tl2::string{.value = {v.c_str(), v.size()}}.store(RpcServerInstanceState::get().tl_storer);
   return true;
 }
 
@@ -148,7 +148,7 @@ inline int64_t f$fetch_long() noexcept {
   return DEFAULT_VALUE;
 }
 
-inline double f$fetch_double() noexcept {
+inline double f$fetch_float() noexcept {
   static constexpr double DEFAULT_VALUE = 0.0;
   if (tl::f32 val{}; val.fetch(RpcServerInstanceState::get().tl_fetcher)) [[likely]] {
     return static_cast<double>(val.value);
@@ -157,7 +157,7 @@ inline double f$fetch_double() noexcept {
   return DEFAULT_VALUE;
 }
 
-inline double f$fetch_float() noexcept {
+inline double f$fetch_double() noexcept {
   static constexpr double DEFAULT_VALUE = 0.0;
   if (tl::f64 val{}; val.fetch(RpcServerInstanceState::get().tl_fetcher)) [[likely]] {
     return val.value;
@@ -175,11 +175,15 @@ inline string f$fetch_string() noexcept {
 }
 
 inline string f$fetch_string2() noexcept {
-  if (tl::string val{}; val.fetch2(RpcServerInstanceState::get().tl_fetcher)) [[likely]] {
+  if (tl2::string val{}; val.fetch(RpcServerInstanceState::get().tl_fetcher)) [[likely]] {
     return {val.value.data(), static_cast<string::size_type>(val.value.size())};
   }
   THROW_EXCEPTION(kphp::rpc::exception::cant_fetch_string::make());
   return {};
+}
+
+inline int64_t f$fetch_get_pos() noexcept {
+  return static_cast<int64_t>(RpcServerInstanceState::get().tl_fetcher.pos());
 }
 
 inline void f$fetch_raw_vector_double(array<double>& vector, int64_t num_elems) noexcept {
@@ -206,8 +210,10 @@ inline bool f$rpc_parse(const string& new_rpc_data) noexcept {
     return false;
   }
 
-  const std::span<const std::byte> spn{reinterpret_cast<const std::byte*>(new_rpc_data.c_str()), new_rpc_data.size()};
-  RpcServerInstanceState::get().tl_storer.store_bytes(spn);
+  auto& rpc_server_instance_st{RpcServerInstanceState::get()};
+  rpc_server_instance_st.tl_storer.clear();
+  rpc_server_instance_st.tl_storer.store_bytes(std::as_bytes(std::span{new_rpc_data.c_str(), new_rpc_data.size()}));
+  rpc_server_instance_st.tl_fetcher = tl::fetcher{rpc_server_instance_st.tl_storer.view()};
   return true;
 }
 
@@ -263,7 +269,8 @@ inline kphp::coro::task<> f$rpc_server_store_response(class_instance<C$VK$TL$Rpc
   // as we are in a coroutine, we must own the data to prevent it from being overwritten by another coroutine,
   // so create a TLBuffer owned by this coroutine
   auto& rpc_server_instance_st{RpcServerInstanceState::get()};
-  tl::K2RpcResponse rpc_response{.value = tl::k2RpcResponseHeader{.flags = {}, .extra = {}, .result = rpc_server_instance_st.tl_storer.view()}};
+  tl::K2RpcResponse rpc_response{.value =
+                                     tl::k2RpcResponseHeader{.flags = {}, .extra_flags = {}, .extra = {}, .result = rpc_server_instance_st.tl_storer.view()}};
   tl::storer tls{rpc_response.footprint()};
   rpc_response.store(tls);
 

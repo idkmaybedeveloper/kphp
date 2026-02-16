@@ -216,6 +216,21 @@ inline size_t pread(k2::descriptor descriptor, std::span<std::byte> buffer, uint
   return k2_pread(descriptor, buffer.size(), static_cast<void*>(buffer.data()), offset);
 }
 
+inline size_t readline(k2::descriptor descriptor, std::span<std::byte> buffer) noexcept {
+  return k2_readline(descriptor, buffer.size(), static_cast<void*>(buffer.data()));
+}
+
+inline void* mmap(k2::descriptor* md, void* addr, size_t length, int32_t prot, int32_t flags, k2::descriptor fd, uint64_t offset) noexcept {
+  return k2_mmap(md, addr, length, prot, flags, fd, offset);
+}
+
+inline std::expected<void, int32_t> madvise(void* addr, size_t length, int32_t advise) noexcept {
+  if (auto error_code{k2_madvise(addr, length, advise)}; error_code != k2::errno_ok) [[unlikely]] {
+    return std::unexpected{error_code};
+  }
+  return {};
+}
+
 inline void please_shutdown(k2::descriptor descriptor) noexcept {
   k2_please_shutdown(descriptor);
 }
@@ -415,11 +430,25 @@ inline auto canonicalize(std::string_view path) noexcept {
   return return_type{{unique_ptr_type{resolved_path, std::invoke(deleter_creator, resolved_path_len, resolved_path_align)}, resolved_path_len}};
 }
 
-inline int32_t stat(std::string_view path, struct stat* stat) noexcept {
-  if (auto error_code{k2_stat(path.data(), path.size(), stat)}; error_code != k2::errno_ok) [[unlikely]] {
-    return error_code;
+inline std::expected<void, int32_t> fstat(k2::descriptor fd, struct stat* stat) noexcept {
+  if (auto error_code{k2_fstat(fd, stat)}; error_code != k2::errno_ok) [[unlikely]] {
+    return std::unexpected{error_code};
   }
-  return k2::errno_ok;
+  return {};
+}
+
+inline std::expected<void, int32_t> stat(std::string_view path, struct stat* stat) noexcept {
+  if (auto error_code{k2_stat(path.data(), path.size(), stat)}; error_code != k2::errno_ok) [[unlikely]] {
+    return std::unexpected{error_code};
+  }
+  return {};
+}
+
+inline std::expected<void, int32_t> lstat(std::string_view path, struct stat* stat) noexcept {
+  if (auto error_code{k2_lstat(path.data(), path.size(), stat)}; error_code != k2::errno_ok) [[unlikely]] {
+    return std::unexpected{error_code};
+  }
+  return {};
 }
 
 using CommandArg = CommandArg;

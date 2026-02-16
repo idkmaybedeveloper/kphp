@@ -357,6 +357,26 @@ size_t k2_read(uint64_t stream_d, size_t buf_len, void* buf);
 size_t k2_pread(uint64_t stream_d, size_t buf_len, void* buf, uint64_t offset);
 
 /**
+ * behavior is similar to libc's `fgets` function, except that EOF and empty string return the same result.
+ *
+ * @return `0` if EOF is reached or an error occurs. total number of bytes read otherwise
+ */
+size_t k2_readline(uint64_t stream_d, size_t buf_len, void* buf);
+
+/**
+ * Semantically equivalent to libc's `mmap` function.
+ *
+ * @param `md` A pointer to a `uint64_t` where the mmap descriptor will be stored upon success.
+ * @param `addr` Must always be nullptr.
+ */
+void* k2_mmap(uint64_t* md, void* addr, size_t length, int32_t prot, int32_t flags, uint64_t fd, uint64_t offset);
+
+/**
+ * Semantically equivalent to libc's `madvise` function.
+ */
+int32_t k2_madvise(void* addr, size_t length, int32_t advise);
+
+/**
  * Sets `StreamStatus.please_whutdown_write=true` for the component on the
  * opposite side (does not affect `StreamStatus` on your side).
  * Does not disable the ability to read from the stream.
@@ -720,6 +740,11 @@ size_t k2_backtrace(void** buffer, size_t size);
 int32_t k2_canonicalize(const char* path, size_t pathlen, char* const* resolved_path, size_t* resolved_pathlen, size_t* resolved_path_align);
 
 /**
+ * Semantically equivalent to libc's `fstat`.
+ */
+int32_t k2_fstat(uint64_t fd, struct stat* statbuf);
+
+/**
  * Semantically equivalent to libc's `stat`.
  *
  * Possible `errno`:
@@ -741,6 +766,29 @@ int32_t k2_canonicalize(const char* path, size_t pathlen, char* const* resolved_
  * `ENOSYS` => Internal error.
  */
 int32_t k2_stat(const char* pathname, size_t pathname_len, struct stat* statbuf);
+
+/**
+ * Semantically equivalent to libc's `lstat`.
+ *
+ * Possible `errno`:
+ * `EACCES` => Search permission is denied for one of the directories in the path prefix of `pathname`.
+ * `EINVAL` => `pathname` or `statbuf` is `NULL`.
+ * `EFAULT` => Bad address.
+ * `ELOOP` => Too many symbolic links encountered while traversing the path.
+ * `ENAMETOOLONG` => `pathname` is too long.
+ * `ENOENT` => A component of `pathname` does not exist or is a dangling symbolic link.
+ * `ENOMEM` => Out of memory (i.e., kernel memory).
+ * `ENOTDIR` => A component of the path prefix of `pathname` is not a directory.
+ * `EOVERFLOW` => `pathname` refers to a file whose size, inode number,
+ *                or number of blocks cannot be represented in, respectively,
+ *                the types `off_t`, `ino_t`, or `blkcnt_t`.  This error can occur
+ *                when, for example, an application compiled on a 32-bit
+ *                platform without `-D_FILE_OFFSET_BITS=64` calls `lstat()` on a
+ *                file whose size exceeds `(1<<31)-1` bytes.
+ * `ERANGE` => Failed to convert `st_size`, `st_blksize`, or `st_blocks` to `int64_t`.
+ * `ENOSYS` => Internal error.
+ */
+int32_t k2_lstat(const char* pathname, size_t pathname_len, struct stat* statbuf);
 
 struct CommandArg {
   const char* arg;

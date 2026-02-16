@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <numeric>
 #include <optional>
 #include <ranges>
@@ -355,15 +356,15 @@ struct Either final {
 };
 
 class string final {
-  static constexpr auto SMALL_STRING_SIZE_LEN = 1;
+  static constexpr auto TINY_STRING_SIZE_LEN = 1;
   static constexpr auto MEDIUM_STRING_SIZE_LEN = 3;
-  static constexpr auto LARGE_STRING_SIZE_LEN = 7;
+  static constexpr auto HUGE_STRING_SIZE_LEN = 7;
 
-  static constexpr uint64_t SMALL_STRING_MAX_LEN = 253;
+  static constexpr uint64_t TINY_STRING_MAX_LEN = 253;
   static constexpr uint64_t MEDIUM_STRING_MAX_LEN = (static_cast<uint64_t>(1) << 24) - 1;
-  static constexpr uint64_t LARGE_STRING_MAX_LEN = (static_cast<uint64_t>(1) << 56) - 1;
+  static constexpr uint64_t HUGE_STRING_MAX_LEN = (static_cast<uint64_t>(1) << 56) - 1;
 
-  static constexpr uint8_t LARGE_STRING_MAGIC = 0xff;
+  static constexpr uint8_t HUGE_STRING_MAGIC = 0xff;
   static constexpr uint8_t MEDIUM_STRING_MAGIC = 0xfe;
 
 public:
@@ -374,26 +375,20 @@ public:
   void store(tl::storer& tls) const noexcept;
 
   constexpr size_t footprint() const noexcept {
-    size_t str_len{value.size()};
+    const size_t str_len{value.size()};
     size_t size_len{};
-    if (str_len <= SMALL_STRING_MAX_LEN) {
-      size_len = SMALL_STRING_SIZE_LEN;
+    if (str_len <= TINY_STRING_MAX_LEN) {
+      size_len = TINY_STRING_SIZE_LEN;
     } else if (str_len <= MEDIUM_STRING_MAX_LEN) {
       size_len = MEDIUM_STRING_SIZE_LEN + 1;
     } else {
-      size_len = LARGE_STRING_SIZE_LEN + 1;
+      size_len = HUGE_STRING_SIZE_LEN + 1;
     }
 
     const auto total_len{size_len + str_len};
     const auto total_len_with_padding{(total_len + 3) & ~3};
     return total_len_with_padding;
   }
-
-  // TL2 functions are here for now
-  static bool fetch2_len(tl::fetcher& tlf, uint64_t& string_len) noexcept;
-  bool fetch2(tl::fetcher& tlf) noexcept;
-  static void store2_len(tl::storer& tls, uint64_t string_len) noexcept;
-  void store2(tl::storer& tls) const noexcept;
 };
 
 struct String final {
@@ -706,11 +701,7 @@ public:
 
   bool fetch(tl::fetcher& tlf) noexcept {
     tl::magic magic{};
-    bool ok{magic.fetch(tlf) && magic.expect(MAGIC)};
-    ok &= tl::mask{}.fetch(tlf);
-    ok &= job_id.fetch(tlf);
-    ok &= body.fetch(tlf);
-    return ok;
+    return magic.fetch(tlf) && magic.expect(MAGIC) && tl::mask{}.fetch(tlf) && job_id.fetch(tlf) && body.fetch(tlf);
   }
 
   void store(tl::storer& tls) const noexcept {
@@ -871,14 +862,14 @@ public:
     bool ok{flags.fetch(tlf)};
 
     if (ok && static_cast<bool>(flags.value & SCHEME_FLAG)) [[likely]] {
-      ok &= opt_scheme.emplace().fetch(tlf);
+      ok = ok && opt_scheme.emplace().fetch(tlf);
     }
     if (ok && static_cast<bool>(flags.value & HOST_FLAG)) {
-      ok &= opt_host.emplace().fetch(tlf);
+      ok = ok && opt_host.emplace().fetch(tlf);
     }
-    ok &= path.fetch(tlf);
+    ok = ok && path.fetch(tlf);
     if (ok && static_cast<bool>(flags.value & QUERY_FLAG)) {
-      ok &= opt_query.emplace().fetch(tlf);
+      ok = ok && opt_query.emplace().fetch(tlf);
     }
     return ok;
   }
@@ -911,11 +902,7 @@ struct httpConnection final {
   tl::i32 remote_port{};
 
   bool fetch(tl::fetcher& tlf) noexcept {
-    bool ok{server_addr.fetch(tlf)};
-    ok &= server_port.fetch(tlf);
-    ok &= remote_addr.fetch(tlf);
-    ok &= remote_port.fetch(tlf);
-    return ok;
+    return server_addr.fetch(tlf) && server_port.fetch(tlf) && remote_addr.fetch(tlf) && remote_port.fetch(tlf);
   }
 };
 
@@ -956,6 +943,136 @@ public:
 
 // ===== RPC =====
 
+namespace exactlyOnce {
+
+struct uuid final {
+  tl::i64 lo{};
+  tl::i64 hi{};
+
+  bool fetch(tl::fetcher& tlf) noexcept {
+    return lo.fetch(tlf) && hi.fetch(tlf);
+  }
+};
+
+struct prepareRequest final {
+  tl::exactlyOnce::uuid persistent_query_uuid{};
+
+  bool fetch(tl::fetcher& tlf) noexcept {
+    return persistent_query_uuid.fetch(tlf);
+  }
+};
+
+struct commitRequest final {
+  tl::exactlyOnce::uuid persistent_query_uuid{};
+  tl::exactlyOnce::uuid persistent_slot_uuid{};
+
+  bool fetch(tl::fetcher& tlf) noexcept {
+    return persistent_query_uuid.fetch(tlf) && persistent_slot_uuid.fetch(tlf);
+  }
+};
+
+class PersistentRequest final {
+  static constexpr uint32_t PREPARE_REQUEST_MAGIC = 0xc8d7'1b66U;
+  static constexpr uint32_t COMMIT_REQUEST_MAGIC = 0x6836'b983U;
+
+public:
+  std::variant<tl::exactlyOnce::prepareRequest, tl::exactlyOnce::commitRequest> request;
+
+  bool fetch(tl::fetcher& tlf) noexcept {
+    tl::magic magic{};
+    if (!magic.fetch(tlf)) {
+      return false;
+    }
+    if (tl::exactlyOnce::prepareRequest prepare_request{}; magic.expect(PREPARE_REQUEST_MAGIC) && prepare_request.fetch(tlf)) {
+      request.emplace<tl::exactlyOnce::prepareRequest>(prepare_request);
+      return true;
+    }
+    if (tl::exactlyOnce::commitRequest commit_request{}; magic.expect(COMMIT_REQUEST_MAGIC) && commit_request.fetch(tlf)) {
+      request.emplace<tl::exactlyOnce::commitRequest>(commit_request);
+      return true;
+    }
+    return false;
+  }
+};
+} // namespace exactlyOnce
+
+namespace tracing {
+
+struct traceID final {
+  tl::i64 lo{};
+  tl::i64 hi{};
+
+  bool fetch(tl::fetcher& tlf) noexcept {
+    return lo.fetch(tlf) && hi.fetch(tlf);
+  }
+};
+
+class traceContext final {
+  static constexpr uint32_t RESERVED_STATUS_0_FLAG = vk::tl::common::tracing::trace_context_flags::reserved_status_0;
+  static constexpr uint32_t RESERVED_STATUS_1_FLAG = vk::tl::common::tracing::trace_context_flags::reserved_status_1;
+  static constexpr uint32_t PARENT_ID_FLAG = vk::tl::common::tracing::trace_context_flags::parent_id;
+  static constexpr uint32_t SOURCE_ID_FLAG = vk::tl::common::tracing::trace_context_flags::source_id;
+  static constexpr uint32_t RESERVED_LEVEL_0_FLAG = vk::tl::common::tracing::trace_context_flags::reserved_level_0;
+  static constexpr uint32_t RESERVED_LEVEL_1_FLAG = vk::tl::common::tracing::trace_context_flags::reserved_level_1;
+  static constexpr uint32_t RESERVED_LEVEL_2_FLAG = vk::tl::common::tracing::trace_context_flags::reserved_level_2;
+  static constexpr uint32_t DEBUG_FLAG = vk::tl::common::tracing::trace_context_flags::debug;
+
+public:
+  tl::tracing::traceID trace_id{};
+  std::optional<tl::i64> opt_parent_id;
+  std::optional<tl::string> opt_source_id;
+
+  // status = reserved_status_0 | (reserved_status_1 << 1)
+  // status == 0 - drop
+  // status == 1 - record
+  // status == 2 - defer
+  bool reserved_status_0{};
+  bool reserved_status_1{};
+
+  bool reserved_level_0{};
+  bool reserved_level_1{};
+  bool reserved_level_2{};
+
+  bool debug_flag{};
+
+  bool fetch(tl::fetcher& tlf) noexcept {
+    tl::mask fields_mask{};
+    bool ok{fields_mask.fetch(tlf)};
+
+    ok = ok && trace_id.fetch(tlf);
+    if (ok && static_cast<bool>(fields_mask.value & PARENT_ID_FLAG)) {
+      ok &= opt_parent_id.emplace().fetch(tlf);
+    }
+    if (ok && static_cast<bool>(fields_mask.value & SOURCE_ID_FLAG)) {
+      ok &= opt_source_id.emplace().fetch(tlf);
+    }
+
+    reserved_status_0 = static_cast<bool>(fields_mask.value & RESERVED_STATUS_0_FLAG);
+    reserved_status_1 = static_cast<bool>(fields_mask.value & RESERVED_STATUS_1_FLAG);
+    reserved_level_0 = static_cast<bool>(fields_mask.value & RESERVED_LEVEL_0_FLAG);
+    reserved_level_1 = static_cast<bool>(fields_mask.value & RESERVED_LEVEL_1_FLAG);
+    reserved_level_2 = static_cast<bool>(fields_mask.value & RESERVED_LEVEL_2_FLAG);
+    debug_flag = static_cast<bool>(fields_mask.value & DEBUG_FLAG);
+
+    return ok;
+  }
+
+  tl::mask get_flags() const noexcept {
+    tl::mask flags{.value = static_cast<tl::mask::underlying_type>(reserved_status_0)};
+    flags.value |= static_cast<tl::mask::underlying_type>(reserved_status_1) << 1;
+    flags.value |= static_cast<tl::mask::underlying_type>(reserved_level_0) << 4;
+    flags.value |= static_cast<tl::mask::underlying_type>(reserved_level_1) << 5;
+    flags.value |= static_cast<tl::mask::underlying_type>(reserved_level_2) << 6;
+    flags.value |= static_cast<tl::mask::underlying_type>(debug_flag) << 7;
+
+    flags.value |= static_cast<tl::mask::underlying_type>(opt_parent_id.has_value()) << 2;
+    flags.value |= static_cast<tl::mask::underlying_type>(opt_source_id.has_value()) << 3;
+    return flags;
+  }
+};
+
+} // namespace tracing
+
 class rpcInvokeReqExtra final {
   static constexpr uint32_t RETURN_BINLOG_POS_FLAG = vk::tl::common::rpc_invoke_req_extra_flags::return_binlog_pos;
   static constexpr uint32_t RETURN_BINLOG_TIME_FLAG = vk::tl::common::rpc_invoke_req_extra_flags::return_binlog_time;
@@ -973,9 +1090,11 @@ class rpcInvokeReqExtra final {
   static constexpr uint32_t SUPPORTED_COMPRESSION_VERSION_FLAG = vk::tl::common::rpc_invoke_req_extra_flags::supported_compression_version;
   static constexpr uint32_t RANDOM_DELAY_FLAG = vk::tl::common::rpc_invoke_req_extra_flags::random_delay;
   static constexpr uint32_t RETURN_VIEW_NUMBER_FLAG = vk::tl::common::rpc_invoke_req_extra_flags::return_view_number;
+  static constexpr uint32_t PERSISTENT_QUERY_FLAG = vk::tl::common::rpc_invoke_req_extra_flags::persistent_query;
+  static constexpr uint32_t TRACE_CONTEXT_FLAG = vk::tl::common::rpc_invoke_req_extra_flags::trace_context;
+  static constexpr uint32_t EXECUTION_CONTEXT_FLAG = vk::tl::common::rpc_invoke_req_extra_flags::execution_context;
 
 public:
-  tl::mask flags{};
   bool return_binlog_pos{};
   bool return_binlog_time{};
   bool return_pid{};
@@ -991,17 +1110,22 @@ public:
   std::optional<tl::i32> opt_custom_timeout_ms;
   std::optional<tl::i32> opt_supported_compression_version;
   std::optional<tl::f64> opt_random_delay;
+  std::optional<tl::exactlyOnce::PersistentRequest> opt_persistent_query;
+  std::optional<tl::tracing::traceContext> opt_trace_context;
+  std::optional<tl::string> opt_execution_context;
   bool return_view_number{};
 
-  bool fetch(tl::fetcher& tlf) noexcept;
+  bool fetch(tl::fetcher& tlf, const tl::mask& flags) noexcept;
+
+  tl::mask get_flags() const noexcept;
 };
 
 struct RpcInvokeReqExtra final {
   tl::rpcInvokeReqExtra inner{};
 
-  bool fetch(tl::fetcher& tlf) noexcept {
+  bool fetch(tl::fetcher& tlf, const tl::mask& flags) noexcept {
     tl::magic magic{};
-    return magic.fetch(tlf) && magic.expect(TL_RPC_INVOKE_REQ_EXTRA) && inner.fetch(tlf);
+    return magic.fetch(tlf) && magic.expect(TL_RPC_INVOKE_REQ_EXTRA) && inner.fetch(tlf, flags);
   }
 };
 
@@ -1018,7 +1142,6 @@ class rpcReqResultExtra final {
   static constexpr uint32_t VIEW_NUMBER_FLAG = vk::tl::common::rpc_req_result_extra_flags::view_number;
 
 public:
-  tl::mask flags{};
   tl::i64 binlog_pos{};
   tl::i64 binlog_time{};
   tl::netPid engine_pid{};
@@ -1030,16 +1153,16 @@ public:
   tl::i64 epoch_number{};
   tl::i64 view_number{};
 
-  void store(tl::storer& tls) const noexcept;
+  void store(tl::storer& tls, const tl::mask& flags) const noexcept;
 
-  size_t footprint() const noexcept;
+  size_t footprint(const tl::mask& flags) const noexcept;
 };
 
 struct RpcReqResultExtra final {
   tl::rpcReqResultExtra inner{};
 
-  void store(tl::storer& tls) const noexcept {
-    tl::magic{.value = TL_RPC_REQ_RESULT_EXTRA}.store(tls), inner.store(tls);
+  void store(tl::storer& tls, const tl::mask& flags) const noexcept {
+    tl::magic{.value = TL_RPC_REQ_RESULT_EXTRA}.store(tls), inner.store(tls, flags);
   }
 };
 
@@ -1058,15 +1181,16 @@ struct k2RpcResponseError final {
 
 struct k2RpcResponseHeader final {
   tl::mask flags{};
+  tl::mask extra_flags{};
   tl::rpcReqResultExtra extra{};
   std::span<const std::byte> result;
 
   void store(tl::storer& tls) const noexcept {
-    flags.store(tls), extra.store(tls), tls.store_bytes(result);
+    flags.store(tls), extra_flags.store(tls), extra.store(tls, extra_flags), tls.store_bytes(result);
   }
 
   constexpr size_t footprint() const noexcept {
-    return flags.footprint() + extra.footprint() + result.size();
+    return flags.footprint() + extra_flags.footprint() + extra.footprint(extra_flags) + result.size();
   }
 };
 
@@ -1136,8 +1260,7 @@ public:
 
   bool fetch(tl::fetcher& tlf) noexcept {
     tl::magic magic{};
-    bool ok{magic.fetch(tlf) && magic.expect(INTER_COMPONENT_SESSION_RESPONSE_HEADER_MAGIC) && id.fetch(tlf) && size.fetch(tlf)};
-    return ok;
+    return magic.fetch(tlf) && magic.expect(INTER_COMPONENT_SESSION_RESPONSE_HEADER_MAGIC) && id.fetch(tlf) && size.fetch(tlf);
   }
 
   constexpr size_t footprint() const noexcept {
@@ -1156,8 +1279,7 @@ public:
 
   bool fetch(tl::fetcher& tlf) noexcept {
     tl::magic magic{};
-    bool ok{magic.fetch(tlf) && magic.expect(WEB_ERROR_MAGIC) && code.fetch(tlf) && description.fetch(tlf)};
-    return ok;
+    return magic.fetch(tlf) && magic.expect(WEB_ERROR_MAGIC) && code.fetch(tlf) && description.fetch(tlf);
   }
 
   constexpr size_t footprint() const noexcept {
@@ -1238,8 +1360,7 @@ public:
 
   bool fetch(tl::fetcher& tlf) noexcept {
     tl::magic magic{};
-    bool ok{magic.fetch(tlf) && magic.expect(WEB_TRANSFER_GET_PROPERTIES_RESULT_OK_MAGIC) && properties.fetch(tlf)};
-    return ok;
+    return magic.fetch(tlf) && magic.expect(WEB_TRANSFER_GET_PROPERTIES_RESULT_OK_MAGIC) && properties.fetch(tlf);
   }
 
   constexpr size_t footprint() const noexcept {
@@ -1268,8 +1389,7 @@ public:
 
   bool fetch(tl::fetcher& tlf) noexcept {
     tl::magic magic{};
-    bool ok{magic.fetch(tlf) && magic.expect(SIMPLE_WEB_TRANSFER_OPEN_RESULT_OK_MAGIC) && descriptor.fetch(tlf)};
-    return ok;
+    return magic.fetch(tlf) && magic.expect(SIMPLE_WEB_TRANSFER_OPEN_RESULT_OK_MAGIC) && descriptor.fetch(tlf);
   }
 
   constexpr size_t footprint() const noexcept {
@@ -1283,8 +1403,7 @@ class SimpleWebTransferResponseResultOk final {
 public:
   bool fetch(tl::fetcher& tlf) noexcept {
     tl::magic magic{};
-    bool ok{magic.fetch(tlf) && magic.expect(SIMPLE_WEB_TRANSFER_RESPONSE_RESULT_OK_MAGIC)};
-    return ok;
+    return magic.fetch(tlf) && magic.expect(SIMPLE_WEB_TRANSFER_RESPONSE_RESULT_OK_MAGIC);
   }
 
   constexpr size_t footprint() const noexcept {
@@ -1298,8 +1417,7 @@ class SimpleWebTransferCloseResultOk final {
 public:
   bool fetch(tl::fetcher& tlf) noexcept {
     tl::magic magic{};
-    bool ok{magic.fetch(tlf) && magic.expect(SIMPLE_WEB_TRANSFER_CLOSE_RESULT_OK_MAGIC)};
-    return ok;
+    return magic.fetch(tlf) && magic.expect(SIMPLE_WEB_TRANSFER_CLOSE_RESULT_OK_MAGIC);
   }
 
   constexpr size_t footprint() const noexcept {
@@ -1313,8 +1431,7 @@ class SimpleWebTransferResetResultOk final {
 public:
   bool fetch(tl::fetcher& tlf) noexcept {
     tl::magic magic{};
-    bool ok{magic.fetch(tlf) && magic.expect(SIMPLE_WEB_TRANSFER_RESET_RESULT_OK_MAGIC)};
-    return ok;
+    return magic.fetch(tlf) && magic.expect(SIMPLE_WEB_TRANSFER_RESET_RESULT_OK_MAGIC);
   }
 
   constexpr size_t footprint() const noexcept {
@@ -1344,8 +1461,7 @@ public:
 
   bool fetch(tl::fetcher& tlf) noexcept {
     tl::magic magic{};
-    bool ok{magic.fetch(tlf) && magic.expect(COMPOSITE_WEB_TRANSFER_OPEN_RESULT_OK_MAGIC) && descriptor.fetch(tlf)};
-    return ok;
+    return magic.fetch(tlf) && magic.expect(COMPOSITE_WEB_TRANSFER_OPEN_RESULT_OK_MAGIC) && descriptor.fetch(tlf);
   }
 
   constexpr size_t footprint() const noexcept {
@@ -1359,8 +1475,7 @@ class CompositeWebTransferAddResultOk final {
 public:
   bool fetch(tl::fetcher& tlf) noexcept {
     tl::magic magic{};
-    bool ok{magic.fetch(tlf) && magic.expect(COMPOSITE_WEB_TRANSFER_ADD_RESULT_OK_MAGIC)};
-    return ok;
+    return magic.fetch(tlf) && magic.expect(COMPOSITE_WEB_TRANSFER_ADD_RESULT_OK_MAGIC);
   }
 
   constexpr size_t footprint() const noexcept {
@@ -1374,8 +1489,7 @@ class CompositeWebTransferRemoveResultOk final {
 public:
   bool fetch(tl::fetcher& tlf) noexcept {
     tl::magic magic{};
-    bool ok{magic.fetch(tlf) && magic.expect(COMPOSITE_WEB_TRANSFER_REMOVE_RESULT_OK_MAGIC)};
-    return ok;
+    return magic.fetch(tlf) && magic.expect(COMPOSITE_WEB_TRANSFER_REMOVE_RESULT_OK_MAGIC);
   }
 
   constexpr size_t footprint() const noexcept {
@@ -1391,8 +1505,7 @@ public:
 
   bool fetch(tl::fetcher& tlf) noexcept {
     tl::magic magic{};
-    bool ok{magic.fetch(tlf) && magic.expect(COMPOSITE_WEB_TRANSFER_PERFORM_RESULT_OK_MAGIC) && remaining.fetch(tlf)};
-    return ok;
+    return magic.fetch(tlf) && magic.expect(COMPOSITE_WEB_TRANSFER_PERFORM_RESULT_OK_MAGIC) && remaining.fetch(tlf);
   }
 
   constexpr size_t footprint() const noexcept {
@@ -1406,8 +1519,7 @@ class CompositeWebTransferCloseResultOk final {
 public:
   bool fetch(tl::fetcher& tlf) noexcept {
     tl::magic magic{};
-    bool ok{magic.fetch(tlf) && magic.expect(COMPOSITE_WEB_TRANSFER_CLOSE_RESULT_OK_MAGIC)};
-    return ok;
+    return magic.fetch(tlf) && magic.expect(COMPOSITE_WEB_TRANSFER_CLOSE_RESULT_OK_MAGIC);
   }
 
   constexpr size_t footprint() const noexcept {
@@ -1423,8 +1535,7 @@ public:
 
   bool fetch(tl::fetcher& tlf) noexcept {
     tl::magic magic{};
-    bool ok{magic.fetch(tlf) && magic.expect(COMPOSITE_WEB_TRANSFER_WAIT_UPDATES_RESULT_OK_MAGIC) && updated_descriptors_num.fetch(tlf)};
-    return ok;
+    return magic.fetch(tlf) && magic.expect(COMPOSITE_WEB_TRANSFER_WAIT_UPDATES_RESULT_OK_MAGIC) && updated_descriptors_num.fetch(tlf);
   }
 
   constexpr size_t footprint() const noexcept {
@@ -1433,3 +1544,41 @@ public:
 };
 
 } // namespace tl
+
+namespace tl2 {
+
+class string final {
+  static constexpr uint8_t HUGE_STRING_MAGIC = 0xff;
+  static constexpr uint8_t MEDIUM_STRING_MAGIC = 0xfe;
+
+  static constexpr auto TINY_STRING_SIZE_LEN = 1;
+  static constexpr auto MEDIUM_STRING_SIZE_LEN = 2;
+  static constexpr auto HUGE_STRING_SIZE_LEN = 8;
+
+  static constexpr uint64_t TINY_STRING_MAX_LEN = 253;
+  static constexpr uint64_t MEDIUM_STRING_MAX_LEN = MEDIUM_STRING_MAGIC + std::numeric_limits<uint16_t>::max();
+  static constexpr uint64_t HUGE_STRING_MAX_LEN = std::numeric_limits<uint64_t>::max();
+
+public:
+  std::string_view value;
+
+  bool fetch(tl::fetcher& tlf) noexcept;
+
+  void store(tl::storer& tls) const noexcept;
+
+  constexpr size_t footprint() const noexcept {
+    const size_t str_len{value.size()};
+    size_t size_len{};
+    if (str_len <= TINY_STRING_MAX_LEN) {
+      size_len = TINY_STRING_SIZE_LEN;
+    } else if (str_len <= MEDIUM_STRING_MAX_LEN) {
+      size_len = MEDIUM_STRING_SIZE_LEN + 1;
+    } else {
+      size_len = HUGE_STRING_SIZE_LEN + 1;
+    }
+
+    return size_len + str_len;
+  }
+};
+
+} // namespace tl2

@@ -4,6 +4,7 @@
 
 #include "runtime-light/stdlib/rpc/rpc-api.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -42,20 +43,6 @@
 namespace kphp::rpc {
 
 namespace detail {
-
-constexpr double MAX_TIMEOUT = 86400.0;
-constexpr double DEFAULT_TIMEOUT = 0.3;
-
-constexpr auto MAX_TIMEOUT_NS = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>{MAX_TIMEOUT});
-constexpr auto DEFAULT_TIMEOUT_NS = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>{DEFAULT_TIMEOUT});
-
-inline std::chrono::nanoseconds normalize_timeout(std::chrono::nanoseconds timeout) noexcept {
-  using namespace std::chrono_literals;
-  if (timeout <= 0ns || timeout > kphp::rpc::detail::MAX_TIMEOUT_NS) {
-    return kphp::rpc::detail::DEFAULT_TIMEOUT_NS;
-  }
-  return timeout;
-}
 
 mixed mixed_array_get_value(const mixed& arr, const string& str_key, int64_t num_key) noexcept {
   if (!arr.is_array()) [[unlikely]] {
@@ -333,7 +320,7 @@ kphp::coro::task<kphp::rpc::query_info> send_request(std::string_view actor, std
 
   // create a task to wait for RPC response. we need to do it even if 'ignore_answer' is 'true' to make sure
   // that the stream will not be closed too early. otherwise, platform may even not send RPC request
-  static constexpr auto awaiter_coroutine{[](int64_t query_id, kphp::component::stream stream, std::chrono::nanoseconds timeout,
+  static constexpr auto awaiter_coroutine{[](int64_t query_id, kphp::component::stream stream, std::chrono::milliseconds timeout,
                                              bool collect_responses_extra_info) noexcept -> kphp::coro::shared_task<std::optional<string>> {
     std::optional<string> opt_response{std::in_place};
     auto fetch_task{kphp::component::fetch_response(stream, kphp::component::read_ext::append(*opt_response))};
@@ -357,16 +344,35 @@ kphp::coro::task<kphp::rpc::query_info> send_request(std::string_view actor, std
     co_return std::move(opt_response);
   }};
 
-  // normalize timeout
-  const auto normalized_timeout{kphp::rpc::detail::normalize_timeout(
-      std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>{opt_timeout.value_or(kphp::rpc::detail::DEFAULT_TIMEOUT)}))};
-  // start awaiter task
-  auto awaiter_task{awaiter_coroutine(query_id, std::move(stream), normalized_timeout, collect_responses_extra_info)};
-  kphp::log::assertion(kphp::coro::io_scheduler::get().start(awaiter_task));
+  static constexpr auto ignore_answer_awaiter_coroutine{[](kphp::component::stream stream, std::chrono::milliseconds timeout) -> kphp::coro::shared_task<void> {
+    auto fetch_task{kphp::component::fetch_response(stream, [](std::span<const std::byte>) noexcept {})};
+    std::ignore = co_await kphp::coro::io_scheduler::get().schedule(std::move(fetch_task), timeout);
+  }};
 
+  // normalize timeout
+  using namespace std::chrono_literals;
+  static constexpr auto DEFAULT_TIMEOUT{300ms};
+  static constexpr auto MIN_TIMEOUT{1ms};
+  static constexpr auto MAX_TIMEOUT{std::chrono::duration_cast<std::chrono::milliseconds>(24h)};
+  static_assert(MIN_TIMEOUT <= MAX_TIMEOUT, "calling std::clamp will lead to undefined behavior");
+  const auto timeout{std::clamp(opt_timeout
+                                    .transform([](const double& timeout) noexcept {
+                                      return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::duration<double>{timeout});
+                                    })
+                                    .value_or(DEFAULT_TIMEOUT),
+                                MIN_TIMEOUT, MAX_TIMEOUT)};
   if (ignore_answer) {
+    // start ignore answer awaiter task
+    auto ignore_answer_awaiter_task{ignore_answer_awaiter_coroutine(std::move(stream), timeout)};
+    kphp::log::assertion(kphp::coro::io_scheduler::get().start(ignore_answer_awaiter_task));
+
+    rpc_client_instance_st.ignore_answer_request_awaiter_tasks.push(std::move(ignore_answer_awaiter_task));
     co_return kphp::rpc::query_info{.id = kphp::rpc::IGNORED_ANSWER_QUERY_ID, .request_size = request_size, .timestamp = timestamp};
   }
+  // start awaiter task
+  auto awaiter_task{awaiter_coroutine(query_id, std::move(stream), timeout, collect_responses_extra_info)};
+  kphp::log::assertion(kphp::coro::io_scheduler::get().start(awaiter_task));
+
   rpc_client_instance_st.response_awaiter_tasks.emplace(query_id, std::move(awaiter_task));
   co_return kphp::rpc::query_info{.id = query_id, .request_size = request_size, .timestamp = timestamp};
 }

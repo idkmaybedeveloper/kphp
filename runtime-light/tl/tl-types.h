@@ -319,20 +319,21 @@ struct Maybe final {
   }
 };
 
-template<typename T, typename U>
+template<std::default_initializable T, std::default_initializable U>
 struct Either final {
   std::variant<T, U> value;
 
   bool fetch(tl::fetcher& tlf) noexcept
   requires tl::deserializable<T> && tl::deserializable<U>
   {
-    T t{};
-    U u{};
     const auto initial_pos{tlf.pos()};
-    if (t.fetch(tlf)) {
+    if (T t{}; t.fetch(tlf)) {
       value.template emplace<T>(std::move(t));
       return true;
-    } else if (tlf.reset(initial_pos); u.fetch(tlf)) {
+    }
+
+    tlf.reset(initial_pos);
+    if (U u{}; u.fetch(tlf)) {
       value.template emplace<U>(std::move(u));
       return true;
     }
@@ -343,9 +344,9 @@ struct Either final {
   requires tl::serializable<T> && tl::serializable<U>
   {
     if (std::holds_alternative<T>(value)) {
-      static_cast<T>(value).store(tls);
+      std::get<T>(value).store(tls);
     } else {
-      static_cast<U>(value).store(tls);
+      std::get<U>(value).store(tls);
     }
   }
 
@@ -525,6 +526,115 @@ struct Vector final {
   requires tl::footprintable<T>
   {
     return tl::magic{.value = TL_VECTOR}.footprint() + inner.footprint();
+  }
+};
+
+template<typename T, size_t N>
+struct tuple final {
+  using array_t = std::array<T, N>;
+  array_t value;
+
+  using iterator = array_t::iterator;
+  using const_iterator = array_t::const_iterator;
+
+  constexpr iterator begin() noexcept {
+    return value.begin();
+  }
+  constexpr iterator end() noexcept {
+    return value.end();
+  }
+  constexpr const_iterator begin() const noexcept {
+    return value.begin();
+  }
+  constexpr const_iterator end() const noexcept {
+    return value.end();
+  }
+  constexpr const_iterator cbegin() const noexcept {
+    return value.cbegin();
+  }
+  constexpr const_iterator cend() const noexcept {
+    return value.cend();
+  }
+
+  constexpr size_t size() const noexcept {
+    return value.size();
+  }
+
+  bool fetch(tl::fetcher& tlf) noexcept
+  requires tl::deserializable<T>
+  {
+    for (T& v : value) {
+      v = T{};
+      if (!v.fetch(tlf)) [[unlikely]] {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  void store(tl::storer& tls) const noexcept
+  requires tl::serializable<T>
+  {
+    std::for_each(value.cbegin(), value.cend(), [&tls](const auto& elem) noexcept { elem.store(tls); });
+  }
+
+  constexpr size_t footprint() const noexcept
+  requires tl::footprintable<T>
+  {
+    auto footprint_view{value | std::views::transform([](const auto& elem) noexcept { return elem.footprint(); })};
+    return std::accumulate(footprint_view.begin(), footprint_view.end(), 0, std::plus<>{});
+  }
+};
+
+template<typename T, size_t N>
+struct Tuple final {
+  tl::tuple<T, N> inner{};
+
+  using iterator = tl::tuple<T, N>::iterator;
+  using const_iterator = tl::tuple<T, N>::const_iterator;
+
+  constexpr iterator begin() noexcept {
+    return inner.begin();
+  }
+  constexpr iterator end() noexcept {
+    return inner.end();
+  }
+  constexpr const_iterator begin() const noexcept {
+    return inner.begin();
+  }
+  constexpr const_iterator end() const noexcept {
+    return inner.end();
+  }
+  constexpr const_iterator cbegin() const noexcept {
+    return inner.cbegin();
+  }
+  constexpr const_iterator cend() const noexcept {
+    return inner.cend();
+  }
+
+  constexpr size_t size() const noexcept {
+    return inner.size();
+  }
+
+  bool fetch(tl::fetcher& tlf) noexcept
+  requires tl::deserializable<T>
+  {
+    tl::magic magic{};
+    return magic.fetch(tlf) && magic.expect(TL_TUPLE) && inner.fetch(tlf);
+  }
+
+  void store(tl::storer& tls) const noexcept
+  requires tl::serializable<T>
+  {
+    tl::magic{.value = TL_TUPLE}.store(tls);
+    inner.store(tls);
+  }
+
+  constexpr size_t footprint() const noexcept
+  requires tl::footprintable<T>
+  {
+    return tl::magic{.value = TL_TUPLE}.footprint() + inner.footprint();
   }
 };
 
@@ -743,12 +853,15 @@ enum HashAlgorithm : uint32_t {
 };
 
 enum CipherAlgorithm : uint32_t {
-  AES128 = 0xe627'c460,
-  AES256 = 0x4c98'c1f9,
+  AES128_GCM = 0xee7e'4261,
+  AES256_GCM = 0xc2f9'eb95,
+  AES128_CBC = 0xe627'c460,
+  AES256_CBC = 0x4c98'c1f9,
 };
 
 enum BlockPadding : uint32_t {
   PKCS7 = 0x699e'c5de,
+  NO_PADDING = 0xffc3'd2f3,
 };
 
 // ===== CONFDATA =====
@@ -1139,6 +1252,7 @@ class rpcReqResultExtra final {
   static constexpr uint32_t FAILED_SUBQUERIES_FLAG = vk::tl::common::rpc_req_result_extra_flags::failed_subqueries;
   static constexpr uint32_t COMPRESSION_VERSION_FLAG = vk::tl::common::rpc_req_result_extra_flags::compression_version;
   static constexpr uint32_t STATS_FLAG = vk::tl::common::rpc_req_result_extra_flags::stats;
+  static constexpr uint32_t SHARDS_BINLOG_POS_FLAG = vk::tl::common::rpc_req_result_extra_flags::shards_binlog_pos;
   static constexpr uint32_t EPOCH_NUMBER_FLAG = vk::tl::common::rpc_req_result_extra_flags::epoch_number;
   static constexpr uint32_t VIEW_NUMBER_FLAG = vk::tl::common::rpc_req_result_extra_flags::view_number;
 
@@ -1151,6 +1265,7 @@ public:
   std::optional<tl::i32> opt_failed_subqueries;
   std::optional<tl::i32> opt_compression_version;
   std::optional<tl::dictionary<tl::string>> opt_stats;
+  std::optional<tl::dictionary<tl::i64>> opt_shards_binlog_pos;
   std::optional<tl::i64> opt_epoch_number;
   std::optional<tl::i64> opt_view_number;
 

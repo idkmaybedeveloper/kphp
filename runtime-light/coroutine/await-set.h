@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <type_traits>
 
 #include "runtime-light/coroutine/async-stack.h"
@@ -13,6 +14,7 @@
 #include "runtime-light/coroutine/coroutine-state.h"
 #include "runtime-light/coroutine/detail/await-set.h"
 #include "runtime-light/coroutine/type-traits.h"
+#include "runtime-light/stdlib/diagnostics/logs.h"
 
 namespace kphp::coro {
 
@@ -44,11 +46,21 @@ public:
   template<typename awaitable_type>
   requires kphp::coro::concepts::awaitable<awaitable_type> && std::is_same_v<typename awaitable_traits<awaitable_type>::awaiter_return_type, return_type>
   void push(awaitable_type awaitable) noexcept {
+    kphp::log::assertion(m_await_broker != nullptr);
     m_await_broker->start_task(detail::await_set::make_await_set_task(std::move(awaitable)), m_coroutine_stack_root, STACK_RETURN_ADDRESS);
   }
 
   auto next() noexcept {
+    kphp::log::assertion(m_await_broker != nullptr);
     return detail::await_set::await_set_awaitable<return_type>{*m_await_broker};
+  }
+
+  auto try_next() noexcept {
+    using result_type = std::optional<decltype(std::declval<detail::await_set::await_set_task<return_type>>().result())>;
+    if (m_await_broker == nullptr) [[unlikely]] {
+      return result_type{std::nullopt};
+    }
+    return result_type{m_await_broker->try_get_result()};
   }
 
   bool empty() const noexcept {
@@ -56,11 +68,8 @@ public:
   }
 
   size_t size() const noexcept {
+    kphp::log::assertion(m_await_broker != nullptr);
     return m_await_broker->size();
-  }
-
-  ~await_set() {
-    m_await_broker.release();
   }
 };
 

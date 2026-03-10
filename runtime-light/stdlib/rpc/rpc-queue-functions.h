@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <optional>
@@ -54,7 +55,8 @@ inline int64_t rpc_queue_create(std::span<int64_t> request_ids) noexcept {
   return queue_id;
 }
 
-inline kphp::coro::task<std::optional<int64_t>> rpc_queue_next(int64_t queue_id, std::chrono::nanoseconds timeout) noexcept {
+template<kphp::concepts::duration duration_type>
+inline kphp::coro::task<std::optional<int64_t>> rpc_queue_next(int64_t queue_id, duration_type timeout) noexcept {
   static constexpr auto rpc_queue_next_task{
       [](auto await_set_awaitable) noexcept -> kphp::coro::task<std::optional<int64_t>> { co_return co_await std::move(await_set_awaitable); }};
 
@@ -67,6 +69,20 @@ inline kphp::coro::task<std::optional<int64_t>> rpc_queue_next(int64_t queue_id,
   }
 
   auto& await_set{(*opt_await_set).get()};
+  if (await_set.empty()) { // if await_set is empty we don't want to suspend the function
+    co_return std::nullopt;
+  }
+
+  if (timeout == duration_type::zero()) {
+    co_return await_set.try_next();
+  }
+
+  using namespace std::chrono_literals;
+  constexpr auto MAX_TIMEOUT{std::chrono::duration_cast<duration_type>(24h)};
+  constexpr auto DEFAULT_TIMEOUT{MAX_TIMEOUT};
+
+  timeout = (std::clamp(timeout, duration_type::zero(), MAX_TIMEOUT) != timeout) ? DEFAULT_TIMEOUT : timeout;
+
   const auto expected_next{co_await kphp::coro::io_scheduler::get().schedule(rpc_queue_next_task(await_set.next()), timeout)};
   if (!expected_next) {
     co_return std::nullopt;
@@ -122,5 +138,5 @@ inline bool f$rpc_queue_empty(int64_t queue_id) noexcept {
 inline kphp::coro::task<Optional<int64_t>> f$rpc_queue_next(int64_t queue_id, double timeout = -1) noexcept {
   auto opt_result{co_await kphp::forks::id_managed(
       kphp::rpc::rpc_queue_next(queue_id, std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>{timeout})))};
-  co_return opt_result ? *opt_result : Optional<int64_t>{};
+  co_return opt_result ? *opt_result : Optional<int64_t>{false};
 }
